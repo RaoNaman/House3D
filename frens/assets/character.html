@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gothic Girl · Three.js Character</title>
+<style>
+  html,body{margin:0;height:100%;background:#1a1426;overflow:hidden;
+    font-family:ui-monospace,Menlo,Consolas,monospace;}
+  canvas{display:block;}
+  #ui{position:fixed;top:14px;left:14px;z-index:10;display:flex;flex-direction:column;gap:7px;
+      padding:14px 16px;border-radius:12px;background:rgba(24,20,36,.85);
+      border:1px solid rgba(180,120,210,.32);backdrop-filter:blur(10px);
+      color:#d8c8e8;font-size:11px;letter-spacing:.08em;text-transform:uppercase;user-select:none;}
+  #ui h1{margin:0 0 4px;font-size:12px;letter-spacing:.28em;color:#f5e8ff;font-weight:600;}
+  #ui label{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+  #ui input[type=color]{-webkit-appearance:none;appearance:none;border:none;width:36px;height:18px;
+      background:transparent;cursor:pointer;padding:0;border-radius:3px;}
+  #ui input[type=color]::-webkit-color-swatch-wrapper{padding:0;}
+  #ui input[type=color]::-webkit-color-swatch{border:1px solid rgba(220,180,240,.4);border-radius:3px;}
+  #ui button{margin-top:4px;cursor:pointer;background:rgba(170,45,90,.32);color:#f5dce8;
+      border:1px solid rgba(210,80,130,.5);border-radius:6px;padding:6px 8px;font:inherit;
+      letter-spacing:.12em;text-transform:uppercase;transition:.15s;}
+  #ui button:hover{background:rgba(220,60,120,.55);}
+  #ui button.on{background:rgba(240,80,150,.8);color:#fff;}
+  #hint{position:fixed;bottom:12px;left:14px;color:#7a6a8a;font-size:10px;letter-spacing:.15em;}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <h1>GOTHIC GIRL</h1>
+  <label>Outfit <input type="color" id="c-outfit" value="#1a1824"></label>
+  <label>Hair   <input type="color" id="c-hair"   value="#16131e"></label>
+  <label>Skin   <input type="color" id="c-skin"   value="#e8c4b0"></label>
+  <label>Accent <input type="color" id="c-accent" value="#a02050"></label>
+  <label>Boots  <input type="color" id="c-boot"   value="#0e0c16"></label>
+  <label>Eyes   <input type="color" id="c-eye"    value="#d43560"></label>
+  <label>Lips   <input type="color" id="c-lip"    value="#6a1a2c"></label>
+  <button id="b-walk">Walk Cycle</button>
+  <button id="b-spin">Auto Rotate</button>
+</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CHARACTER FACTORY  —  copy this block into your own project as
+   gothicGirl.js, then:
+       import { createGothicGirl } from './gothicGirl.js';
+       const girl = createGothicGirl({ outfitColor: 0x2a1838 });
+       scene.add(girl.root);
+       girl.update(dt);           // in your render loop
+       girl.setWalk(true);
+       girl.setOutfitColor(0x552244);
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ===================== CHARACTER FACTORY START ========================== */
+
+const CG_DEFAULTS = {
+  height:      1.66,
+  skinColor:   0xe8c4b0,
+  outfitColor: 0x1a1824,
+  accentColor: 0xa02050,
+  hairColor:   0x16131e,
+  bootColor:   0x0e0c16,
+  eyeColor:    0xd43560,
+  lipColor:    0x6a1a2c,
+};
+
+const CG_GEO = {
+  sphere: new THREE.SphereGeometry(0.5, 20, 14),
+  box:    new THREE.BoxGeometry(1, 1, 1),
+};
+const _cgCylCache = new Map();
+function cgCyl(rt, rb, seg = 10, open = false) {
+  const k = rt + '|' + rb + '|' + seg + '|' + (open ? 1 : 0);
+  let g = _cgCylCache.get(k);
+  if (!g) { g = new THREE.CylinderGeometry(rt, rb, 1, seg, 1, open); _cgCylCache.set(k, g); }
+  return g;
+}
+function cgMesh(geo, mat, sx, sy, sz, px, py, pz) {
+  const m = new THREE.Mesh(geo, mat);
+  m.scale.set(sx, sy, sz);
+  m.position.set(px || 0, py || 0, pz || 0);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  return m;
+}
+
+function createGothicGirl(opts = {}) {
+  const o = Object.assign({}, CG_DEFAULTS, opts);
+  const root = new THREE.Group();
+  root.name = 'GothicGirl';
+
+  /* ─────────────────────────── materials ─────────────────────────── */
+  const M = {
+    skin:  new THREE.MeshStandardMaterial({ color: o.skinColor,   roughness: 0.66, metalness: 0.00 }),
+    outfit:new THREE.MeshStandardMaterial({ color: o.outfitColor, roughness: 0.80, metalness: 0.10 }),
+    accent:new THREE.MeshStandardMaterial({ color: o.accentColor, roughness: 0.34, metalness: 0.60 }),
+    hair:  new THREE.MeshStandardMaterial({ color: o.hairColor,   roughness: 0.40, metalness: 0.35 }),
+    boot:  new THREE.MeshStandardMaterial({ color: o.bootColor,   roughness: 0.32, metalness: 0.45 }),
+    white: new THREE.MeshStandardMaterial({ color: 0xf4eff8,      roughness: 0.22 }),
+    iris:  new THREE.MeshStandardMaterial({ color: o.eyeColor,    roughness: 0.18, metalness: 0.15,
+                                            emissive: o.eyeColor, emissiveIntensity: 0.45 }),
+    pupil: new THREE.MeshStandardMaterial({ color: 0x0a0810,      roughness: 0.12 }),
+    lip:   new THREE.MeshStandardMaterial({ color: o.lipColor,    roughness: 0.28 }),
+    lash:  new THREE.MeshStandardMaterial({ color: 0x0c0a14,      roughness: 0.55 }),
+  };
+  M.skirt = M.outfit.clone();
+  M.skirt.side = THREE.DoubleSide;
+  M.skirt.roughness = 0.88;
+  const outfitMats = [M.outfit, M.skirt];
+
+  const ball = (m, w, h, d, x, y, z) => cgMesh(CG_GEO.sphere, m, w, h, d, x, y, z);
+  const box  = (m, w, h, d, x, y, z) => cgMesh(CG_GEO.box,    m, w, h, d, x, y, z);
+  const limb = (m, rt, rb, len) => {
+    const g = new THREE.Group();
+    const mesh = new THREE.Mesh(cgCyl(rt, rb, 10), m);
+    mesh.scale.y = len;
+    mesh.position.y = -len / 2;
+    mesh.castShadow = mesh.receiveShadow = true;
+    g.add(mesh);
+    return g;
+  };
+
+  /* ═══════════════════════════════ HIPS / TORSO ═══════════════════════════════ */
+  const hips = new THREE.Group();
+  hips.position.y = 0.92;
+  root.add(hips);
+
+  hips.add(ball(M.outfit, 0.220, 0.190, 0.165, 0, -0.012, 0));
+
+  const skirt = new THREE.Mesh(cgCyl(0.128, 0.250, 20, true), M.skirt);
+  skirt.scale.y = 0.34;
+  skirt.position.y = -0.13;
+  skirt.castShadow = skirt.receiveShadow = true;
+  hips.add(skirt);
+
+  // skirt hem trim
+  const hem = new THREE.Mesh(new THREE.TorusGeometry(0.250, 0.010, 5, 24), M.accent);
+  hem.rotation.x = Math.PI / 2;
+  hem.position.y = -0.30;
+  hips.add(hem);
+
+  const spine = new THREE.Group();
+  spine.position.y = 0.045;
+  hips.add(spine);
+
+  const chest = new THREE.Group();
+  chest.position.y = 0.145;
+  spine.add(chest);
+
+  const torso = new THREE.Mesh(cgCyl(0.140, 0.088, 16), M.outfit);
+  torso.scale.y = 0.345;
+  torso.position.y = 0.095;
+  torso.castShadow = torso.receiveShadow = true;
+  chest.add(torso);
+
+  chest.add(ball(M.outfit, 0.215, 0.145, 0.155, 0, 0.085, 0.032));
+
+  // corset lacing
+  const rAt = y => 0.088 + ((y + 0.08) / 0.345) * 0.052;
+  for (let i = 0; i < 7; i++) {
+    const y = -0.065 + i * 0.028;
+    const lace = box(M.accent, 0.056, 0.007, 0.009, 0, y, rAt(y) + 0.004);
+    lace.rotation.z = (i % 2 ? 1 : -1) * 0.55;
+    chest.add(lace);
+  }
+
+  /* ═══════════════════════════════ NECK / HEAD ═══════════════════════════════ */
+  const neck = new THREE.Group();
+  neck.position.y = 0.235;
+  chest.add(neck);
+  neck.add(cgMesh(cgCyl(0.037, 0.043, 10), M.skin, 1, 0.090, 1, 0, 0.032, 0));
+
+  const choker = new THREE.Mesh(new THREE.TorusGeometry(0.044, 0.009, 6, 20), M.accent);
+  choker.rotation.x = Math.PI / 2;
+  choker.position.y = 0.020;
+  choker.castShadow = true;
+  neck.add(choker);
+
+  const headPivot = new THREE.Group();
+  headPivot.position.y = 0.075;
+  neck.add(headPivot);
+
+  const head = new THREE.Group();
+  head.position.y = 0.100;
+  headPivot.add(head);
+
+  /* ---- skull & jaw ---- */
+  head.add(ball(M.skin, 0.200, 0.230, 0.200, 0, 0, 0));
+  head.add(ball(M.skin, 0.152, 0.100, 0.150, 0, -0.072, 0.024));   // jaw / chin
+
+  /* ---- eyes ---- */
+  const EX = 0.043, EY = 0.014;
+  for (const s of [-1, 1]) {
+    const ex = EX * s;
+    // socket shadow
+    head.add(ball(M.lash, 0.046, 0.038, 0.012, ex, EY + 0.002, 0.084));
+    // white
+    head.add(cgMesh(CG_GEO.sphere, M.white, 0.038, 0.032, 0.018, ex, EY, 0.090));
+    // iris
+    head.add(cgMesh(CG_GEO.sphere, M.iris,  0.024, 0.024, 0.012, ex, EY, 0.098));
+    // pupil
+    head.add(cgMesh(CG_GEO.sphere, M.pupil, 0.012, 0.013, 0.008, ex, EY, 0.102));
+    // highlight
+    head.add(cgMesh(CG_GEO.sphere, M.white, 0.007, 0.007, 0.005, ex + 0.006, EY + 0.006, 0.105));
+
+    // upper eyeliner
+    const liner = box(M.lash, 0.046, 0.006, 0.007, ex, EY + 0.020, 0.093);
+    liner.rotation.z = -s * 0.14;
+    head.add(liner);
+
+    // outer lash flick
+    const flick = box(M.lash, 0.016, 0.005, 0.006, ex + s * 0.026, EY + 0.020, 0.092);
+    flick.rotation.z = -s * 0.55;
+    head.add(flick);
+
+    // eyebrow
+    const brow = box(M.hair, 0.044, 0.007, 0.010, ex, EY + 0.038, 0.088);
+    brow.rotation.z = -s * 0.10;
+    head.add(brow);
+  }
+
+  /* ---- nose ---- */
+  head.add(cgMesh(CG_GEO.sphere, M.skin, 0.022, 0.034, 0.028, 0, -0.022, 0.094));
+  head.add(ball(M.skin, 0.026, 0.018, 0.020, 0, -0.034, 0.092));
+
+  /* ---- lips ---- */
+  const upperLip = box(M.lip, 0.036, 0.007, 0.012, 0, -0.056, 0.088);
+  upperLip.rotation.x = 0.08;
+  head.add(upperLip);
+  head.add(box(M.lip, 0.030, 0.010, 0.012, 0, -0.066, 0.087));
+
+  /* ---- blush hint ---- */
+  for (const s of [-1, 1]) {
+    head.add(ball(M.accent, 0.040, 0.016, 0.014, s * 0.058, -0.028, 0.076));
+  }
+
+  /* ---- ears ---- */
+  for (const s of [-1, 1]) {
+    head.add(ball(M.skin, 0.032, 0.052, 0.030, s * 0.098, -0.004, 0.004));
+    const earring = ball(M.accent, 0.014, 0.014, 0.014, s * 0.104, -0.034, 0.004);
+    head.add(earring);
+  }
+
+  /* ═══════════════════════════════ HAIR ═══════════════════════════════ */
+  const hairRoot = new THREE.Group();
+  head.add(hairRoot);
+
+  // main hair shell — larger than the skull and pushed back so the face is exposed
+  hairRoot.add(ball(M.hair, 0.214, 0.238, 0.214, 0, 0.008, -0.014));
+  // extra back volume
+  hairRoot.add(ball(M.hair, 0.196, 0.200, 0.180, 0, -0.020, -0.048));
+  // top tuft
+  hairRoot.add(ball(M.hair, 0.150, 0.090, 0.150, 0, 0.118, -0.020));
+
+  const strands = [];
+  function strand(x, y, z, w, h, d, rx, rz, amp, phase) {
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    g.rotation.set(rx, 0, rz);
+    const m = box(M.hair, w, h, d, 0, -h / 2, 0);
+    g.add(m);
+    hairRoot.add(g);
+    strands.push({ g, rx, rz, amp, phase });
+  }
+
+  // choppy boy-cut bangs (short, above the eyes so the face stays visible)
+  const bangX = [-0.078, -0.048, -0.016, 0.016, 0.048, 0.078];
+  bangX.forEach((x, i) => {
+    const h = i % 2 ? 0.055 : 0.070;
+    strand(x, 0.088, 0.070, 0.030, h, 0.045,
+           -0.20, (i % 2 ? 1 : -1) * 0.14, 0.10, i * 0.85);
+  });
+
+  // side sweeps
+  strand(-0.092, 0.060, 0.028, 0.034, 0.150, 0.062,  0.02,  0.13, 0.14, 1.7);
+  strand( 0.092, 0.060, 0.028, 0.034, 0.150, 0.062,  0.02, -0.13, 0.14, 2.4);
+  // long asymmetric gothic strand
+  strand( 0.086, 0.072, 0.058, 0.026, 0.210, 0.040, -0.04, -0.17, 0.17, 3.1);
+  strand(-0.086, 0.072, 0.058, 0.024, 0.170, 0.040, -0.04,  0.17, 0.15, 3.7);
+
+  // nape tufts
+  for (let i = 0; i < 4; i++) {
+    strand(-0.058 + i * 0.039, 0.018, -0.090, 0.038, 0.110, 0.052,
+           0.10, (i - 1.5) * 0.09, 0.10, 4.0 + i);
+  }
+
+  /* ═══════════════════════════════ ARMS ═══════════════════════════════ */
+  function buildArm(side) {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(0.134 * side, 0.180, 0);
+    shoulder.rotation.z = 0.14 * side;
+    chest.add(shoulder);
+
+    shoulder.add(ball(M.outfit, 0.108, 0.100, 0.108, 0.008 * side, -0.010, 0));
+    shoulder.add(ball(M.accent, 0.104, 0.018, 0.104, 0.008 * side, -0.056, 0)); // sleeve trim
+
+    const upper = new THREE.Group();
+    shoulder.add(upper);
+    upper.add(limb(M.skin, 0.043, 0.036, 0.265));
+    upper.add(ball(M.skin, 0.074, 0.074, 0.074, 0, -0.265, 0));
+
+    const lower = new THREE.Group();
+    lower.position.y = -0.265;
+    upper.add(lower);
+    lower.add(limb(M.outfit, 0.046, 0.036, 0.245));
+
+    const cuff = new THREE.Mesh(cgCyl(0.044, 0.044, 10), M.accent);
+    cuff.scale.y = 0.024;
+    cuff.position.y = -0.238;
+    cuff.castShadow = true;
+    lower.add(cuff);
+
+    /* hand */
+    const hand = new THREE.Group();
+    hand.position.y = -0.245;
+    lower.add(hand);
+    hand.add(box(M.skin, 0.030, 0.082, 0.068, 0, -0.041, 0));
+
+    const fingers = [];
+    const fdef = [
+      { z: -0.0240, l1: 0.028, l2: 0.024, r: 0.0075, curl: 0.55 },
+      { z: -0.0080, l1: 0.032, l2: 0.027, r: 0.0080, curl: 0.60 },
+      { z:  0.0080, l1: 0.031, l2: 0.026, r: 0.0080, curl: 0.60 },
+      { z:  0.0240, l1: 0.026, l2: 0.022, r: 0.0072, curl: 0.55 },
+    ];
+    for (const d of fdef) {
+      const base = new THREE.Group();
+      base.position.set(0, -0.082, d.z);
+      hand.add(base);
+
+      const s1 = new THREE.Mesh(cgCyl(d.r, d.r * 0.92, 6), M.skin);
+      s1.scale.y = d.l1; s1.position.y = -d.l1 / 2; s1.castShadow = true;
+      base.add(s1);
+
+      const mid = new THREE.Group();
+      mid.position.y = -d.l1;
+      base.add(mid);
+
+      const s2 = new THREE.Mesh(cgCyl(d.r * 0.92, d.r * 0.75, 6), M.skin);
+      s2.scale.y = d.l2; s2.position.y = -d.l2 / 2; s2.castShadow = true;
+      mid.add(s2);
+
+      fingers.push({ base, mid, rest: d.curl, side, axis: 'z' });
+    }
+
+    // thumb
+    const thumb = new THREE.Group();
+    thumb.position.set(0, -0.048, 0.032);
+    thumb.rotation.set(-0.70, 0, -0.25 * side);
+    hand.add(thumb);
+
+    const t1 = new THREE.Mesh(cgCyl(0.0085, 0.008, 6), M.skin);
+    t1.scale.y = 0.028; t1.position.y = -0.014; t1.castShadow = true;
+    thumb.add(t1);
+
+    const thumbMid = new THREE.Group();
+    thumbMid.position.y = -0.028;
+    thumb.add(thumbMid);
+
+    const t2 = new THREE.Mesh(cgCyl(0.008, 0.007, 6), M.skin);
+    t2.scale.y = 0.024; t2.position.y = -0.012; t2.castShadow = true;
+    thumbMid.add(t2);
+
+    fingers.push({ base: thumb, mid: thumbMid, rest: 0.30, side, axis: 'x', baseRestX: -0.70 });
+
+    return { shoulder, upper, lower, hand, fingers };
+  }
+
+  /* ═══════════════════════════════ LEGS ═══════════════════════════════ */
+  function buildLeg(side) {
+    const hipJoint = new THREE.Group();
+    hipJoint.position.set(0.076 * side, -0.030, 0);
+    hips.add(hipJoint);
+
+    const thigh = new THREE.Group();
+    hipJoint.add(thigh);
+    thigh.add(limb(M.outfit, 0.074, 0.058, 0.420));
+
+    const knee = new THREE.Group();
+    knee.position.y = -0.420;
+    thigh.add(knee);
+    knee.add(ball(M.outfit, 0.102, 0.102, 0.102, 0, 0, 0));
+
+    const shin = new THREE.Group();
+    knee.add(shin);
+    shin.add(limb(M.boot, 0.060, 0.046, 0.400));
+
+    const cuff = new THREE.Mesh(cgCyl(0.064, 0.082, 12), M.boot);
+    cuff.scale.y = 0.078;
+    cuff.position.y = -0.050;
+    cuff.castShadow = true;
+    shin.add(cuff);
+
+    const foot = new THREE.Group();
+    foot.position.y = -0.400;
+    shin.add(foot);
+    foot.add(box(M.boot, 0.078, 0.058, 0.170, 0, -0.040, 0.036));
+    foot.add(ball(M.boot, 0.076, 0.058, 0.092, 0, -0.042, 0.118));
+    foot.add(box(M.accent, 0.079, 0.010, 0.055, 0, -0.012, 0.078)); // strap
+
+    return { hipJoint, thigh, knee, shin, foot };
+  }
+
+  const armL = buildArm( 1), armR = buildArm(-1);
+  const legL = buildLeg( 1), legR = buildLeg(-1);
+  const allFingers = armL.fingers.concat(armR.fingers);
+
+  /* ═══════════════════════════════ ANIMATION ═══════════════════════════════ */
+  let time = 0;
+  let walkPhase = 0;
+  let walkBlend = 0;
+  let walkTarget = 0;
+
+  function update(dt) {
+    dt = Math.min(dt || 0.016, 0.05);
+    time += dt;
+    walkBlend += (walkTarget - walkBlend) * Math.min(1, dt * 5);
+    walkPhase += dt * 6.2;
+
+    const w = walkBlend;
+    const idle = 1 - w;
+    const p  = walkPhase;
+    const sw = Math.sin(p);
+    const cw = Math.cos(p);
+    const breathe = Math.sin(time * 1.55) * idle;
+
+    /* ---------- hips ---------- */
+    hips.position.y = 0.92 - 0.070 * sw * sw * w + breathe * 0.004;
+    hips.position.x = 0.014 * sw * w;
+    hips.rotation.y = -0.11 * sw * w + Math.sin(time * 0.50) * 0.010 * idle;
+    hips.rotation.z =  0.030 * sw * w + Math.sin(time * 0.70) * 0.007 * idle;
+    hips.rotation.x =  0.020 * w + breathe * 0.006;
+
+    /* ---------- spine / chest ---------- */
+    spine.rotation.x =  0.030 * w + breathe * 0.010;
+    spine.rotation.y =  0.060 * sw * w;
+    spine.rotation.z = -0.020 * sw * w;
+
+    chest.rotation.y =  0.100 * sw * w + Math.sin(time * 0.45) * 0.018 * idle;
+    chest.rotation.x = -0.020 * w - breathe * 0.010;
+
+    /* ---------- head (stabilised) ---------- */
+    headPivot.rotation.y = -0.045 * sw * w + Math.sin(time * 0.40) * 0.09 * idle;
+    headPivot.rotation.x = -0.015 * w + Math.sin(time * 0.60) * 0.025 * idle;
+    headPivot.rotation.z = Math.sin(time * 0.35) * 0.022 * idle;
+
+    /* ---------- legs ---------- */
+    const thighL =  sw * 0.42 * w;
+    const thighR = -sw * 0.42 * w;
+    legL.thigh.rotation.x = thighL;
+    legR.thigh.rotation.x = thighR;
+    legL.thigh.rotation.z =  0.015 * idle;
+    legR.thigh.rotation.z = -0.015 * idle;
+
+    const kneeL = Math.pow(Math.max(0, -cw), 0.8) * 0.95 * w;
+    const kneeR = Math.pow(Math.max(0,  cw), 0.8) * 0.95 * w;
+    legL.shin.rotation.x = kneeL + 0.06 * w;
+    legR.shin.rotation.x = kneeR + 0.06 * w;
+
+    legL.foot.rotation.x = -(thighL + legL.shin.rotation.x) * 0.92;
+    legR.foot.rotation.x = -(thighR + legR.shin.rotation.x) * 0.92;
+
+    /* ---------- arms ---------- */
+    const armSwing = 0.55 * w;
+    armL.upper.rotation.x = -sw * armSwing + 0.05 + breathe * 0.02;
+    armR.upper.rotation.x =  sw * armSwing + 0.05 + breathe * 0.02;
+    armL.upper.rotation.z =  0.05 * idle + 0.015 * sw;
+    armR.upper.rotation.z = -0.05 * idle - 0.015 * sw;
+
+    armL.lower.rotation.x = -0.22 - Math.max(0,  sw) * 0.50 * w - breathe * 0.02;
+    armR.lower.rotation.x = -0.22 - Math.max(0, -sw) * 0.50 * w - breathe * 0.02;
+
+    armL.hand.rotation.x = -sw * 0.10 * w;
+    armR.hand.rotation.x =  sw * 0.10 * w;
+
+    /* ---------- fingers ---------- */
+    for (let i = 0; i < allFingers.length; i++) {
+      const f = allFingers[i];
+      const c = f.rest + Math.sin(time * 1.4 + i * 0.9) * 0.045 + w * 0.18;
+      if (f.axis === 'z') {
+        f.base.rotation.z = -f.side * c;
+        f.mid.rotation.z  = -f.side * c * 0.9;
+      } else {
+        f.base.rotation.x = f.baseRestX - c * 0.45;
+        f.mid.rotation.x  = -c * 0.8;
+      }
+    }
+
+    /* ---------- hair ---------- */
+    const windX = Math.sin(time * 1.05) * 0.030 + Math.sin(time * 2.6) * 0.011;
+    const windZ = Math.cos(time * 0.90) * 0.028;
+    for (const s of strands) {
+      const a = Math.sin(time * 1.55 + s.phase);
+      const b = Math.cos(time * 1.10 + s.phase * 1.7);
+      s.g.rotation.x = s.rx + a * s.amp * 0.55 + windX + Math.sin(p * 2) * 0.02 * w;
+      s.g.rotation.z = s.rz + b * s.amp * 0.45 + windZ;
+    }
+  }
+
+  /* ═══════════════════════════════ PUBLIC API ═══════════════════════════════ */
+  root.scale.setScalar(o.height / 1.66);
+
+  const api = {
+    root, options: o, materials: M,
+    parts: { hips, spine, chest, neck, headPivot, head, hairRoot, strands,
+             armL, armR, legL, legR, skirt },
+
+    setOutfitColor(hex) { outfitMats.forEach(m => m.color.set(hex)); o.outfitColor = hex; return api; },
+    setHairColor(hex)   { M.hair.color.set(hex);   o.hairColor = hex;   return api; },
+    setSkinColor(hex)   { M.skin.color.set(hex);   o.skinColor = hex;   return api; },
+    setAccentColor(hex) { M.accent.color.set(hex); o.accentColor = hex; return api; },
+    setBootColor(hex)   { M.boot.color.set(hex);   o.bootColor = hex;   return api; },
+    setEyeColor(hex)    { M.iris.color.set(hex); M.iris.emissive.set(hex); o.eyeColor = hex; return api; },
+    setLipColor(hex)    { M.lip.color.set(hex);    o.lipColor = hex;    return api; },
+    setHeight(h)        { root.scale.setScalar(h / 1.66); o.height = h;  return api; },
+
+    setWalk(on)         { walkTarget = on ? 1 : 0; return api; },
+    lookAt(yaw, pitch)  { headPivot.rotation.y = yaw; headPivot.rotation.x = pitch; return api; },
+
+    update,
+
+    dispose() {
+      Object.values(M).forEach(m => m.dispose && m.dispose());
+    }
+  };
+  return api;
+}
+
+/* ====================== CHARACTER FACTORY END =========================== */
+
+window.GothicGirl = { create: createGothicGirl, DEFAULTS: CG_DEFAULTS };
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DEMO SCENE  (delete everything below when embedding the character)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x241c33);
+scene.fog = new THREE.FogExp2(0x241c33, 0.030);
+
+const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(1.6, 1.45, 3.0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.30;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1.02, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.minDistance = 1.2;
+controls.maxDistance = 8;
+controls.maxPolarAngle = Math.PI * 0.52;
+controls.update();
+
+/* ─────────────────────────── lighting ─────────────────────────── */
+scene.add(new THREE.AmbientLight(0x8a76b0, 0.55));
+scene.add(new THREE.HemisphereLight(0xc2a8e8, 0x3a2c48, 1.6));
+
+const key = new THREE.DirectionalLight(0xffeaf6, 2.6);
+key.position.set(2.4, 3.6, 3.2);
+key.castShadow = true;
+key.shadow.mapSize.set(1024, 1024);
+key.shadow.camera.near = 0.5;
+key.shadow.camera.far = 14;
+key.shadow.camera.left = -2.2;
+key.shadow.camera.right = 2.2;
+key.shadow.camera.top = 2.8;
+key.shadow.camera.bottom = -0.6;
+key.shadow.bias = -0.0009;
+scene.add(key);
+
+const frontFill = new THREE.PointLight(0xffd8ec, 9, 8, 2);
+frontFill.position.set(0.6, 1.75, 2.2);
+scene.add(frontFill);
+
+const rim = new THREE.PointLight(0xa040ff, 16, 10, 2);
+rim.position.set(-2.2, 2.2, -2.2);
+scene.add(rim);
+
+const fill = new THREE.PointLight(0xff3a70, 9, 8, 2);
+fill.position.set(2.2, 1.0, -1.6);
+scene.add(fill);
+
+const bottom = new THREE.PointLight(0x7040c0, 4, 5, 2);
+bottom.position.set(0, 0.15, 1.1);
+scene.add(bottom);
+
+/* ─────────────────────────── floor ─────────────────────────── */
+const floor = new THREE.Mesh(
+  new THREE.CircleGeometry(3.4, 64),
+  new THREE.MeshStandardMaterial({ color: 0x2a2238, roughness: 0.55, metalness: 0.35 })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+const ring = new THREE.Mesh(
+  new THREE.RingGeometry(1.02, 1.11, 72),
+  new THREE.MeshBasicMaterial({ color: 0xd43560, transparent: true, opacity: 0.65, side: THREE.DoubleSide })
+);
+ring.rotation.x = -Math.PI / 2;
+ring.position.y = 0.002;
+scene.add(ring);
+
+const ring2 = new THREE.Mesh(
+  new THREE.RingGeometry(1.55, 1.58, 72),
+  new THREE.MeshBasicMaterial({ color: 0x8a50d0, transparent: true, opacity: 0.35, side: THREE.DoubleSide })
+);
+ring2.rotation.x = -Math.PI / 2;
+ring2.position.y = 0.001;
+scene.add(ring2);
+
+/* ─────────────────────────── character ─────────────────────────── */
+const girl = createGothicGirl();
+scene.add(girl.root);
+
+/* ─────────────────────────── UI ─────────────────────────── */
+const $ = id => document.getElementById(id);
+const hex = v => parseInt(v.slice(1), 16);
+
+$('c-outfit').addEventListener('input', e => girl.setOutfitColor(hex(e.target.value)));
+$('c-hair'  ).addEventListener('input', e => girl.setHairColor(hex(e.target.value)));
+$('c-skin'  ).addEventListener('input', e => girl.setSkinColor(hex(e.target.value)));
+$('c-accent').addEventListener('input', e => girl.setAccentColor(hex(e.target.value)));
+$('c-boot'  ).addEventListener('input', e => girl.setBootColor(hex(e.target.value)));
+$('c-eye'   ).addEventListener('input', e => girl.setEyeColor(hex(e.target.value)));
+$('c-lip'   ).addEventListener('input', e => girl.setLipColor(hex(e.target.value)));
+
+let walking = false;
+$('b-walk').addEventListener('click', () => {
+  walking = !walking;
+  girl.setWalk(walking);
+  $('b-walk').classList.toggle('on', walking);
+});
+
+let spinning = false;
+$('b-spin').addEventListener('click', () => {
+  spinning = !spinning;
+  controls.autoRotate = spinning;
+  controls.autoRotateSpeed = 1.3;
+  $('b-spin').classList.toggle('on', spinning);
+});
+
+/* ─────────────────────────── loop ─────────────────────────── */
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+  girl.update(dt);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
